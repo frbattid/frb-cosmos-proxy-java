@@ -13,6 +13,8 @@ import java.net.HttpURLConnection;
 import java.net.Socket;
 import java.net.URL;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map.Entry;
 
 /**
  *
@@ -26,22 +28,18 @@ public class ProxyThread extends Thread {
     private enum HttpMethod { GET, POST }
     
     private Socket socket = null;
-    private final int publicPort;
     private final int privatePort;
     private final String privateHost;
-    private static final int BUFFER_SIZE = 32768;
     
     /**
      * Constructor.
      * @param socket
-     * @param publicPort
      * @param privatePort
      * @param privateHost
      */
-    public ProxyThread(Socket socket, int publicPort, int privatePort, String privateHost) {
+    public ProxyThread(Socket socket, int privatePort, String privateHost) {
         super("ProxyThread");
         this.socket = socket;
-        this.publicPort = publicPort;
         this.privatePort = privatePort;
         this.privateHost = privateHost;
     } // ProxyThread
@@ -125,6 +123,7 @@ public class ProxyThread extends Thread {
         // forward the response to the client
         publicOut.write(response);
         publicOut.flush();
+        System.out.println("<< " + response);
 
         // close everything
         try {
@@ -141,7 +140,7 @@ public class ProxyThread extends Thread {
     } // run
     
     private String sendGET(HttpMethod method, String privateURL, HashMap<String, String> headers) {
-        String res = "";
+        String response = "";
         BufferedReader privateIn;
 
         try {
@@ -157,31 +156,41 @@ public class ProxyThread extends Thread {
                 System.out.println(">> >> " + header + ": " + value);
             } // for
 
-            if (conn.getContentLength() > 0) {
-                try {
-                    privateIn = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                } catch (IOException e) {
-                    return res;
-                } // try catch
-            } else {
-                return res;
-            } // if else
+            try {
+                privateIn = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            } catch (IOException e) {
+                return response;
+            } // try catch
             
+            // get the response status
+            System.out.println("<< << " + conn.getResponseCode() + " " + conn.getResponseMessage());
+            
+            // get the response headers
+            for (Entry<String, List<String>> header : conn.getHeaderFields().entrySet()) {
+                System.out.println("<< << " + header.getKey() + ": " + header.getValue());
+            } // for
+            
+            // get the response payload
             String line;
             
             while ((line = privateIn.readLine()) != null) {
-                if (res.isEmpty()) {
-                    res = line;
+                if (response.isEmpty()) {
+                    response = line;
                 } else {
-                    res += "\n" + line;
+                    response += "\n" + line;
                 } // if else
             } // while
 
             privateIn.close();
-            return res;
+            
+            if (!response.isEmpty()) {
+                System.out.println("<< << " + response);
+            } // if
+            
+            return response;
         } catch (Exception e) {
-            return res;
-        } // try catch
+            return response;
+        } // try catch // try catch
     } // sendGET
     
     private String sendPOST() {

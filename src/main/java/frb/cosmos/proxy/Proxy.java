@@ -42,7 +42,7 @@ public final class Proxy {
         } // try catch
 
         while (listening) {
-            new ProxyThread(serverSocket.accept(), PUBLIC_PORT, PRIVATE_PORT, PRIVATE_HOST).start();
+            new ProxyThread(serverSocket.accept(), PRIVATE_PORT, PRIVATE_HOST).start();
         } // while
         
         serverSocket.close();
