@@ -10,9 +10,11 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.net.Socket;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.HashMap;
 
 /**
  *
@@ -22,6 +24,7 @@ public class ProxyThread extends Thread {
     private Socket socket = null;
     private final int publicPort;
     private final int privatePort;
+    private final String privateHost;
     private static final int BUFFER_SIZE = 32768;
     
     /**
@@ -30,11 +33,12 @@ public class ProxyThread extends Thread {
      * @param publicPort
      * @param privatePort
      */
-    public ProxyThread(Socket socket, int publicPort, int privatePort) {
+    public ProxyThread(Socket socket, int publicPort, int privatePort, String privateHost) {
         super("ProxyThread");
         this.socket = socket;
         this.publicPort = publicPort;
         this.privatePort = privatePort;
+        this.privateHost = privateHost;
     } // ProxyThread
 
     @Override
@@ -52,40 +56,72 @@ public class ProxyThread extends Thread {
 
         // read the received request
         String inputLine;
-        String method;
-        String publicUrl = null;
+        String method = null;
+        String path = null;
+        HashMap<String, String> publicHeaders = new HashMap<>();
 
         try {
             while ((inputLine = publicIn.readLine()) != null) {
-                String[] tokens = inputLine.split(" ");
-                method = tokens[0];
-                publicUrl = tokens[1];
-                System.out.println("Request received, method: " + method + ", URL: " + publicUrl);
+                if (inputLine.length() > 0) {
+                    String[] tokens = inputLine.split(" ");
+                    String firstToken = tokens[0];
+                    String secondToken = tokens[1];
+
+                    if (firstToken.equals("GET")) {
+                        method = firstToken;
+                        path = secondToken;
+                    } else {
+                        publicHeaders.put(firstToken, secondToken);
+                    } // if else
+
+                    System.out.println(">> " + inputLine);
+                } else {
+                    break;
+                } // if else
             } // while
         } catch (Exception e) {
             return;
         } // try catch
         
-        if (publicUrl == null) {
+        if (method == null) {
             return;
         } // if
         
-        // change ports
-        String privateUrl = publicUrl.replace(Integer.toString(publicPort), Integer.toString(privatePort));
+        // build the private headers
+        HashMap<String, String> privateHeaders = new HashMap<>();
         
+        for (String header : publicHeaders.keySet()) {
+            if (header.equals("Host:")) {
+                privateHeaders.put(header, privateHost + ":" + privatePort);
+            } else {
+                privateHeaders.put(header, publicHeaders.get(header));
+            } // else
+        } // for
+        
+        // build the private URL
+        String privateURL = "http://" + privateHeaders.get("Host:") + path;
+                
         // forward the received request to the private port
         BufferedReader privateIn;
 
         try {
-            URL url = new URL(privateUrl);
+            URL url = new URL(privateURL);
             URLConnection conn = url.openConnection();
-            conn.setDoInput(true);
-            conn.setDoOutput(false);
+            HttpURLConnection huc = (HttpURLConnection) conn;
+            huc.setDoInput(true);
+            huc.setDoOutput(false);
+            
+            for (String header : publicHeaders.keySet()) {
+                String value = publicHeaders.get(header);
+                huc.setRequestProperty(header, value);
+                System.out.println(">> >> " + header + " " + value);
+            } // for
+            
             InputStream is;
 
-            if (conn.getContentLength() > 0) {
+            if (huc.getContentLength() > 0) {
                 try {
-                    is = conn.getInputStream();
+                    is = huc.getInputStream();
                     privateIn = new BufferedReader(new InputStreamReader(is));
                 } catch (IOException e) {
                     return;

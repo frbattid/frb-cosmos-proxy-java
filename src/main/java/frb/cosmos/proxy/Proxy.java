@@ -16,6 +16,7 @@ public final class Proxy {
     
     private static final int PUBLIC_PORT = 14000;
     private static final int PRIVATE_PORT = 41000;
+    private static final String PRIVATE_HOST = "0.0.0.0";
     
     /**
      * Constructor. It is private since utility classes should not have a public or default constructor.
@@ -41,7 +42,7 @@ public final class Proxy {
         } // try catch
 
         while (listening) {
-            new ProxyThread(serverSocket.accept(), PUBLIC_PORT, PRIVATE_PORT).start();
+            new ProxyThread(serverSocket.accept(), PUBLIC_PORT, PRIVATE_PORT, PRIVATE_HOST).start();
         } // while
         
         serverSocket.close();
