@@ -203,43 +203,45 @@ public class ProxyThread extends Thread {
             privateIn = new BufferedReader(new InputStreamReader(conn.getInputStream()));
             
             // get the response status
-            response = conn.getResponseCode() + " " + conn.getResponseMessage() + "\r\n";
-            System.out.println("<< << " + conn.getResponseCode() + " " + conn.getResponseMessage());
+            response = "HTTP/1.1 " + conn.getResponseCode() + " " + conn.getResponseMessage() + "\r\n";
+            System.out.println("<< << HTTP/1.1 " + conn.getResponseCode() + " " + conn.getResponseMessage());
             
             // get the response headers
+            boolean isChunked = false;
+            
             for (Entry<String, List<String>> header : conn.getHeaderFields().entrySet()) {
-                System.out.println("<< << " + header.getKey() + ": " + header.getValue());
-                
-                if (response.isEmpty()) {
-                    response = header.getKey() + ": " + header.getValue() + "\r\n";
-                } else {
-                    response += header.getKey() + ": " + header.getValue() + "\r\n";
-                } // if else
+                if (header.getKey() != null) {
+                    String name = header.getKey();
+                    String value = header.getValue().toString().replaceAll("[\\[\\]]", "");
+                    System.out.println("<< << " + header.getKey() + ": " + value);
+                    response += name + ": " + value + "\r\n";
+                    
+                    if (name.equals("Transfer-Encoding") && value.equals("Chunked")) {
+                        isChunked = true;
+                    } // if
+                } // if
             } // for
             
             response += "\r\n";
             
             // get the response payload
+            String responsePayload = "";
             String line;
             
             while ((line = privateIn.readLine()) != null) {
-                if (response.isEmpty()) {
-                    response = line;
-                } else {
-                    response += "\r\n" + line;
-                } // if else
+                responsePayload += line;
             } // while
             
-            response += "\r\n";
-
             privateIn.close();
             
-            if (!response.isEmpty()) {
-                System.out.println("<< << " + response);
+            // compose the final response
+            if (isChunked) {
+                response += Integer.valueOf(String.valueOf(responsePayload.length()), 16) + "\r\n";
             } // if
             
+            response += responsePayload + "\r\n";
             return response;
-        } catch (Exception e) {
+        } catch (IOException | NumberFormatException e) {
             System.out.println("Error while forwarding the request: " + e.getMessage());
             return response;
         } // try catch
