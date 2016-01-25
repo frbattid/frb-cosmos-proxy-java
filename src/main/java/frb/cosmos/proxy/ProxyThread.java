@@ -6,14 +6,12 @@
 package frb.cosmos.proxy;
 
 import java.io.BufferedReader;
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.net.HttpURLConnection;
 import java.net.Socket;
 import java.net.URL;
-import java.net.URLConnection;
 import java.util.HashMap;
 
 /**
@@ -21,6 +19,12 @@ import java.util.HashMap;
  * @author frb
  */
 public class ProxyThread extends Thread {
+    
+    /**
+     * Accepted Http methods.
+     */
+    private enum HttpMethod { GET, POST }
+    
     private Socket socket = null;
     private final int publicPort;
     private final int privatePort;
@@ -32,6 +36,7 @@ public class ProxyThread extends Thread {
      * @param socket
      * @param publicPort
      * @param privatePort
+     * @param privateHost
      */
     public ProxyThread(Socket socket, int publicPort, int privatePort, String privateHost) {
         super("ProxyThread");
@@ -44,11 +49,11 @@ public class ProxyThread extends Thread {
     @Override
     public void run() {
         // open in and out regarding the public side
-        DataOutputStream publicOut;
+        PrintWriter publicOut;
         BufferedReader publicIn;
 
         try {
-            publicOut = new DataOutputStream(socket.getOutputStream());
+            publicOut = new PrintWriter(socket.getOutputStream());
             publicIn = new BufferedReader(new InputStreamReader(socket.getInputStream()));
         } catch (Exception e) {
             return;
@@ -56,34 +61,35 @@ public class ProxyThread extends Thread {
 
         // read the received request
         String inputLine;
-        String method = null;
+        boolean firstLine = true;
+        HttpMethod method = null;
         String path = null;
         HashMap<String, String> publicHeaders = new HashMap<>();
 
         try {
             while ((inputLine = publicIn.readLine()) != null) {
                 if (inputLine.length() > 0) {
-                    String[] tokens = inputLine.split(" ");
-                    String firstToken = tokens[0];
-                    String secondToken = tokens[1];
-
-                    if (firstToken.equals("GET")) {
-                        method = firstToken;
-                        path = secondToken;
-                    } else {
-                        publicHeaders.put(firstToken, secondToken);
-                    } // if else
-
                     System.out.println(">> " + inputLine);
+                    String[] tokens = inputLine.split(" ");
+                    
+                    if (firstLine) {
+                        method = HttpMethod.valueOf(tokens[0]);
+                        path = tokens[1];
+                        firstLine = false;
+                    } else {
+                        publicHeaders.put(tokens[0].replaceFirst(":", ""), tokens[1]);
+                    } // if else
                 } else {
                     break;
                 } // if else
             } // while
         } catch (Exception e) {
+            System.out.println("Error while reading the received request: " + e.getMessage());
             return;
         } // try catch
         
-        if (method == null) {
+        if (method == null || path == null) {
+            System.out.println("Malformed request");
             return;
         } // if
         
@@ -91,7 +97,8 @@ public class ProxyThread extends Thread {
         HashMap<String, String> privateHeaders = new HashMap<>();
         
         for (String header : publicHeaders.keySet()) {
-            if (header.equals("Host:")) {
+            if (header.equals("Host")) {
+                // this is a proxy for Cosmos, which needs this kind of translation
                 privateHeaders.put(header, privateHost + ":" + privatePort);
             } else {
                 privateHeaders.put(header, publicHeaders.get(header));
@@ -99,54 +106,28 @@ public class ProxyThread extends Thread {
         } // for
         
         // build the private URL
-        String privateURL = "http://" + privateHeaders.get("Host:") + path;
+        String privateURL = "http://" + privateHeaders.get("Host") + path;
                 
-        // forward the received request to the private port
-        BufferedReader privateIn;
-
-        try {
-            URL url = new URL(privateURL);
-            URLConnection conn = url.openConnection();
-            HttpURLConnection huc = (HttpURLConnection) conn;
-            huc.setDoInput(true);
-            huc.setDoOutput(false);
-            
-            for (String header : publicHeaders.keySet()) {
-                String value = publicHeaders.get(header);
-                huc.setRequestProperty(header, value);
-                System.out.println(">> >> " + header + " " + value);
-            } // for
-            
-            InputStream is;
-
-            if (huc.getContentLength() > 0) {
-                try {
-                    is = huc.getInputStream();
-                    privateIn = new BufferedReader(new InputStreamReader(is));
-                } catch (IOException e) {
-                    return;
-                } // try catch
-            } else {
-                return;
-            } // if else
-
-            byte[] by = new byte[BUFFER_SIZE];
-            int index = is.read(by, 0, BUFFER_SIZE);
-
-            while (index != -1) {
-                publicOut.write(by, 0, index);
-                index = is.read(by, 0, BUFFER_SIZE);
-            } // while
-            
-            publicOut.flush();
-        } catch (Exception e) {
-            //publicOut.writeBytes("");
-            return;
-        } // try catch
+        // forward the received request to the private host:port
+        String response;
+        
+        switch (method) {
+            case GET:
+                response = sendGET(method, privateURL, privateHeaders);
+                break;
+            case POST:
+                response = sendPOST();
+                break;
+            default:
+                response = "";
+        } // switch
+        
+        // forward the response to the client
+        publicOut.write(response);
+        publicOut.flush();
 
         // close everything
         try {
-            privateIn.close();
             publicOut.close();
             publicIn.close();
 
@@ -154,8 +135,57 @@ public class ProxyThread extends Thread {
                 socket.close();
             } // if
         } catch (Exception e) {
+            System.out.println("Error while closing the streams");
         } // try catch
 
     } // run
+    
+    private String sendGET(HttpMethod method, String privateURL, HashMap<String, String> headers) {
+        String res = "";
+        BufferedReader privateIn;
+
+        try {
+            URL url = new URL(privateURL);
+            System.out.println(">> >> " + method.toString() + " " + url.getPath() + " HTTP/1.1");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setDoInput(true);
+            conn.setDoOutput(false);
+            
+            for (String header : headers.keySet()) {
+                String value = headers.get(header);
+                conn.setRequestProperty(header, value);
+                System.out.println(">> >> " + header + ": " + value);
+            } // for
+
+            if (conn.getContentLength() > 0) {
+                try {
+                    privateIn = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                } catch (IOException e) {
+                    return res;
+                } // try catch
+            } else {
+                return res;
+            } // if else
+            
+            String line;
+            
+            while ((line = privateIn.readLine()) != null) {
+                if (res.isEmpty()) {
+                    res = line;
+                } else {
+                    res += "\n" + line;
+                } // if else
+            } // while
+
+            privateIn.close();
+            return res;
+        } catch (Exception e) {
+            return res;
+        } // try catch
+    } // sendGET
+    
+    private String sendPOST() {
+        return "";
+    } // sendPORT
     
 } // ProxyThread
