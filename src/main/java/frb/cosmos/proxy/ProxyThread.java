@@ -25,7 +25,7 @@ public class ProxyThread extends Thread {
     /**
      * Accepted Http methods.
      */
-    private enum HttpMethod { GET, POST }
+    private enum HttpMethod { GET, POST, PUT, DELETE }
     
     private Socket socket = null;
     private final int privatePort;
@@ -59,29 +59,50 @@ public class ProxyThread extends Thread {
 
         // read the received request
         String inputLine;
-        boolean firstLine = true;
+        boolean isFirstLine = true;
+        boolean readingPayload = false;
+        int payloadLength = 0;
         HttpMethod method = null;
         String path = null;
         HashMap<String, String> publicHeaders = new HashMap<>();
-
+        String payload = "";
+        
         try {
             while ((inputLine = publicIn.readLine()) != null) {
                 if (inputLine.length() > 0) {
                     System.out.println(">> " + inputLine);
                     String[] tokens = inputLine.split(" ");
                     
-                    if (firstLine) {
+                    if (isFirstLine) {
                         method = HttpMethod.valueOf(tokens[0]);
                         path = tokens[1];
-                        firstLine = false;
+                        isFirstLine = false;
+                    } else if (!readingPayload) {
+                        String headerName = tokens[0].replaceFirst(":", "");
+                        String headerValue = tokens[1];
+                        publicHeaders.put(headerName, headerValue);
+                        
+                        if (headerName.equals("Content-Length")) {
+                            payloadLength = Integer.parseInt(headerValue);
+                        } // if
                     } else {
-                        publicHeaders.put(tokens[0].replaceFirst(":", ""), tokens[1]);
-                    } // if else
+                        if (payload.isEmpty()) {
+                            payload = inputLine;
+                        } else {
+                            payload += inputLine;
+                        } // if else
+                        
+                        if (payload.length() == payloadLength) {
+                            readingPayload = false;
+                        } // if
+                    } // else
+                } else if (!readingPayload && payloadLength > 0) {
+                    readingPayload = true;
                 } else {
                     break;
                 } // if else
             } // while
-        } catch (Exception e) {
+        } catch (IOException | NumberFormatException e) {
             System.out.println("Error while reading the received request: " + e.getMessage());
             return;
         } // try catch
@@ -107,18 +128,7 @@ public class ProxyThread extends Thread {
         String privateURL = "http://" + privateHeaders.get("Host") + path;
                 
         // forward the received request to the private host:port
-        String response;
-        
-        switch (method) {
-            case GET:
-                response = sendGET(method, privateURL, privateHeaders);
-                break;
-            case POST:
-                response = sendPOST();
-                break;
-            default:
-                response = "";
-        } // switch
+        String response = forward(method, privateURL, privateHeaders, payload);
         
         // forward the response to the client
         publicOut.write(response);
@@ -139,7 +149,7 @@ public class ProxyThread extends Thread {
 
     } // run
     
-    private String sendGET(HttpMethod method, String privateURL, HashMap<String, String> headers) {
+    private String forward(HttpMethod method, String privateURL, HashMap<String, String> headers, String payload) {
         String response = "";
         BufferedReader privateIn;
 
@@ -147,20 +157,48 @@ public class ProxyThread extends Thread {
             URL url = new URL(privateURL);
             System.out.println(">> >> " + method.toString() + " " + url.getPath() + " HTTP/1.1");
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setDoInput(true);
-            conn.setDoOutput(false);
+            
+            switch (method) {
+                case GET:
+                    conn.setDoInput(true);
+                    conn.setDoOutput(false);
+                    conn.setRequestMethod("GET");
+                    break;
+                case POST:
+                    conn.setDoOutput(true);
+                    conn.setRequestMethod("POST");
+                    break;
+                case PUT:
+                    conn.setDoOutput(true);
+                    conn.setRequestMethod("PUT");
+                    break;
+                case DELETE:
+                    conn.setDoOutput(true);
+                    conn.setRequestMethod("DELETE");
+                    break;
+                default:
+                    break;
+            } // switch
             
             for (String header : headers.keySet()) {
                 String value = headers.get(header);
                 conn.setRequestProperty(header, value);
                 System.out.println(">> >> " + header + ": " + value);
             } // for
-
-            try {
-                privateIn = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-            } catch (IOException e) {
-                return response;
-            } // try catch
+            
+            switch (method) {
+                case POST:
+                case PUT:
+                    PrintWriter privateOut = new PrintWriter(conn.getOutputStream());
+                    privateOut.write(payload);
+                    break;
+                case GET:
+                case DELETE:
+                default:
+                    break;
+            } // switch
+            
+            privateIn = new BufferedReader(new InputStreamReader(conn.getInputStream()));
             
             // get the response status
             System.out.println("<< << " + conn.getResponseCode() + " " + conn.getResponseMessage());
@@ -170,7 +208,7 @@ public class ProxyThread extends Thread {
                 System.out.println("<< << " + header.getKey() + ": " + header.getValue());
             } // for
             
-            // get the response payload
+            // get the response readingPayload
             String line;
             
             while ((line = privateIn.readLine()) != null) {
@@ -189,12 +227,9 @@ public class ProxyThread extends Thread {
             
             return response;
         } catch (Exception e) {
+            System.out.println("Error while forwarding the request: " + e.getMessage());
             return response;
-        } // try catch // try catch
-    } // sendGET
-    
-    private String sendPOST() {
-        return "";
-    } // sendPORT
+        } // try catch
+    } // forward
     
 } // ProxyThread
